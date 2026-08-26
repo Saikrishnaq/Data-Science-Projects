@@ -1,0 +1,2333 @@
+# ================================================================
+# DETECTING DATA DRIFT BEFORE IT BREAKS PRODUCTION
+# ================================================================
+# Google Colab - SINGLE CELL
+#
+# DATASET:
+# /content/holidays_events.csv
+#
+# NO KAGGLE API
+# NO FILE UPLOAD
+# NO OTHER DATASET REQUIRED
+#
+# PROJECT:
+# Holiday Events Data Drift Monitoring System
+#
+# FEATURES:
+#   1. Data quality monitoring
+#   2. Time-based reference/production simulation
+#   3. Categorical distribution monitoring
+#   4. Population Stability Index (PSI)
+#   5. KL Divergence
+#   6. Event-frequency monitoring
+#   7. Transfer-rate monitoring
+#   8. Drift classification
+#   9. Retraining recommendation
+#  10. Interactive monitoring dashboard
+#  11. Monitoring CSV reports
+# ================================================================
+
+
+# ================================================================
+# 1. INSTALL LIBRARIES
+# ================================================================
+
+!pip -q install scipy plotly
+
+
+# ================================================================
+# 2. IMPORT LIBRARIES
+# ================================================================
+
+import pandas as pd
+import numpy as np
+
+from scipy.stats import entropy
+
+import plotly.graph_objects as go
+
+from IPython.display import display, HTML
+
+import warnings
+
+warnings.filterwarnings("ignore")
+
+
+# ================================================================
+# 3. LOAD YOUR EXISTING DATASET
+# ================================================================
+
+FILE_PATH = "/content/holidays_events.csv"
+
+df = pd.read_csv(FILE_PATH)
+
+print("=" * 75)
+print("DATASET LOADED")
+print("=" * 75)
+
+print()
+
+print("File:")
+print(FILE_PATH)
+
+print()
+
+print("Shape:")
+print(df.shape)
+
+print()
+
+print("Columns:")
+print(df.columns.tolist())
+
+print()
+
+print("First 5 rows:")
+
+display(df.head())
+
+
+# ================================================================
+# 4. DATA QUALITY CHECK
+# ================================================================
+
+print()
+print("=" * 75)
+print("DATA QUALITY CHECK")
+print("=" * 75)
+
+quality_report = pd.DataFrame({
+
+    "Column": df.columns,
+
+    "Data Type": [
+        str(df[col].dtype)
+        for col in df.columns
+    ],
+
+    "Missing Values": [
+        df[col].isna().sum()
+        for col in df.columns
+    ],
+
+    "Missing %": [
+        round(
+            df[col].isna().mean() * 100,
+            2
+        )
+        for col in df.columns
+    ],
+
+    "Unique Values": [
+        df[col].nunique()
+        for col in df.columns
+    ]
+})
+
+display(quality_report)
+
+
+# ================================================================
+# 5. DATA PREPROCESSING
+# ================================================================
+
+print()
+print("=" * 75)
+print("DATA PREPROCESSING")
+print("=" * 75)
+
+
+# Convert date
+
+df["date"] = pd.to_datetime(
+    df["date"],
+    errors="coerce"
+)
+
+
+# Clean categorical columns
+
+categorical_columns = [
+
+    "type",
+
+    "locale",
+
+    "locale_name",
+
+    "description"
+]
+
+
+for column in categorical_columns:
+
+    if column in df.columns:
+
+        df[column] = (
+
+            df[column]
+
+            .fillna("Unknown")
+
+            .astype(str)
+
+            .str.strip()
+        )
+
+
+# Convert transferred
+
+df["transferred"] = (
+
+    df["transferred"]
+
+    .astype(str)
+
+    .str.lower()
+
+    .map({
+
+        "true": 1,
+
+        "false": 0
+
+    })
+)
+
+
+# Remove invalid dates
+
+df = (
+
+    df
+
+    .dropna(
+        subset=["date"]
+    )
+
+    .sort_values(
+        "date"
+    )
+
+    .reset_index(
+        drop=True
+    )
+)
+
+
+print(
+    "Cleaned dataset shape:",
+    df.shape
+)
+
+print()
+
+print(
+    "Date range:"
+)
+
+print(
+    df["date"].min(),
+    "→",
+    df["date"].max()
+)
+
+
+# ================================================================
+# 6. CREATE TIME FEATURES
+# ================================================================
+
+df["year"] = (
+
+    df["date"]
+
+    .dt
+
+    .year
+)
+
+
+df["month"] = (
+
+    df["date"]
+
+    .dt
+
+    .month
+)
+
+
+df["day"] = (
+
+    df["date"]
+
+    .dt
+
+    .day
+)
+
+
+df["day_of_week"] = (
+
+    df["date"]
+
+    .dt
+
+    .dayofweek
+)
+
+
+df["week_of_year"] = (
+
+    df["date"]
+
+    .dt
+
+    .isocalendar()
+
+    .week
+
+    .astype(int)
+)
+
+
+df["quarter"] = (
+
+    df["date"]
+
+    .dt
+
+    .quarter
+)
+
+
+# ================================================================
+# 7. CREATE REFERENCE / PRODUCTION SPLIT
+# ================================================================
+
+print()
+print("=" * 75)
+print("PRODUCTION SIMULATION")
+print("=" * 75)
+
+
+unique_dates = np.sort(
+
+    df["date"]
+
+    .unique()
+)
+
+
+# 70% historical reference
+# 30% simulated production
+
+split_index = int(
+
+    len(unique_dates)
+
+    * 0.70
+)
+
+
+reference_end = (
+
+    unique_dates[
+        split_index
+    ]
+)
+
+
+reference_data = (
+
+    df[
+        df["date"]
+        <=
+        reference_end
+    ]
+
+    .copy()
+)
+
+
+production_data = (
+
+    df[
+        df["date"]
+        >
+        reference_end
+    ]
+
+    .copy()
+)
+
+
+print()
+
+print(
+    "REFERENCE PERIOD:"
+)
+
+print(
+
+    reference_data[
+        "date"
+    ].min(),
+
+    "→",
+
+    reference_data[
+        "date"
+    ].max()
+)
+
+
+print()
+
+print(
+    "PRODUCTION PERIOD:"
+)
+
+print(
+
+    production_data[
+        "date"
+    ].min(),
+
+    "→",
+
+    production_data[
+        "date"
+    ].max()
+)
+
+
+print()
+
+print(
+    "Reference events:",
+    len(reference_data)
+)
+
+print(
+    "Production events:",
+    len(production_data)
+)
+
+
+# ================================================================
+# 8. PSI FUNCTION
+# ================================================================
+
+def calculate_psi(
+    reference,
+    current
+):
+
+    reference = (
+
+        pd.Series(
+            reference
+        )
+
+        .fillna("Unknown")
+
+        .astype(str)
+    )
+
+
+    current = (
+
+        pd.Series(
+            current
+        )
+
+        .fillna("Unknown")
+
+        .astype(str)
+    )
+
+
+    categories = sorted(
+
+        set(
+            reference.unique()
+        )
+
+        |
+
+        set(
+            current.unique()
+        )
+    )
+
+
+    if len(categories) == 0:
+
+        return np.nan
+
+
+    reference_counts = (
+
+        reference
+
+        .value_counts()
+
+        .reindex(
+            categories,
+            fill_value=0
+        )
+    )
+
+
+    current_counts = (
+
+        current
+
+        .value_counts()
+
+        .reindex(
+            categories,
+            fill_value=0
+        )
+    )
+
+
+    reference_pct = (
+
+        reference_counts
+
+        /
+
+        len(reference)
+    )
+
+
+    current_pct = (
+
+        current_counts
+
+        /
+
+        len(current)
+    )
+
+
+    epsilon = 1e-6
+
+
+    reference_pct = np.where(
+
+        reference_pct == 0,
+
+        epsilon,
+
+        reference_pct
+    )
+
+
+    current_pct = np.where(
+
+        current_pct == 0,
+
+        epsilon,
+
+        current_pct
+    )
+
+
+    psi = np.sum(
+
+        (
+
+            current_pct
+
+            -
+
+            reference_pct
+
+        )
+
+        *
+
+        np.log(
+
+            current_pct
+
+            /
+
+            reference_pct
+        )
+    )
+
+
+    return float(psi)
+
+
+# ================================================================
+# 9. KL DIVERGENCE FUNCTION
+# ================================================================
+
+def calculate_kl_divergence(
+
+    reference,
+
+    current
+
+):
+
+    reference = (
+
+        pd.Series(
+            reference
+        )
+
+        .fillna("Unknown")
+
+        .astype(str)
+    )
+
+
+    current = (
+
+        pd.Series(
+            current
+        )
+
+        .fillna("Unknown")
+
+        .astype(str)
+    )
+
+
+    categories = sorted(
+
+        set(
+            reference.unique()
+        )
+
+        |
+
+        set(
+            current.unique()
+        )
+    )
+
+
+    if len(categories) == 0:
+
+        return np.nan
+
+
+    reference_counts = (
+
+        reference
+
+        .value_counts()
+
+        .reindex(
+            categories,
+            fill_value=0
+        )
+    )
+
+
+    current_counts = (
+
+        current
+
+        .value_counts()
+
+        .reindex(
+            categories,
+            fill_value=0
+        )
+    )
+
+
+    epsilon = 1e-10
+
+
+    reference_probability = (
+
+        reference_counts
+        .astype(float)
+
+        +
+
+        epsilon
+    )
+
+
+    current_probability = (
+
+        current_counts
+        .astype(float)
+
+        +
+
+        epsilon
+    )
+
+
+    reference_probability /= (
+        reference_probability.sum()
+    )
+
+
+    current_probability /= (
+        current_probability.sum()
+    )
+
+
+    return float(
+
+        entropy(
+
+            current_probability,
+
+            reference_probability
+        )
+    )
+
+
+# ================================================================
+# 10. FEATURES TO MONITOR
+# ================================================================
+
+MONITORED_FEATURES = [
+
+    "type",
+
+    "locale",
+
+    "locale_name",
+
+    "description",
+
+    "transferred"
+]
+
+
+# ================================================================
+# 11. CREATE MONTHLY MONITORING WINDOWS
+# ================================================================
+
+production_data[
+    "monitor_month"
+] = (
+
+    production_data[
+        "date"
+    ]
+
+    .dt
+
+    .to_period("M")
+
+    .astype(str)
+)
+
+
+months = sorted(
+
+    production_data[
+        "monitor_month"
+    ]
+
+    .unique()
+)
+
+
+print()
+print(
+    "Monitoring windows:",
+    len(months)
+)
+
+
+# ================================================================
+# 12. CALCULATE DRIFT FOR EACH MONTH
+# ================================================================
+
+print()
+print("=" * 75)
+print("CALCULATING DRIFT")
+print("=" * 75)
+
+
+drift_results = []
+
+
+for month in months:
+
+
+    current_window = (
+
+        production_data[
+
+            production_data[
+                "monitor_month"
+            ]
+
+            ==
+
+            month
+
+        ]
+    )
+
+
+    row = {
+
+        "month": month,
+
+        "date": (
+
+            current_window[
+                "date"
+            ]
+
+            .max()
+        ),
+
+        "event_count": (
+
+            len(
+                current_window
+            )
+        ),
+
+        "transfer_rate": (
+
+            current_window[
+                "transferred"
+            ]
+
+            .mean()
+        )
+    }
+
+
+    for feature in MONITORED_FEATURES:
+
+
+        reference_values = (
+
+            reference_data[
+                feature
+            ]
+        )
+
+
+        current_values = (
+
+            current_window[
+                feature
+            ]
+        )
+
+
+        row[
+            f"{feature}_psi"
+        ] = calculate_psi(
+
+            reference_values,
+
+            current_values
+        )
+
+
+        row[
+            f"{feature}_kl"
+        ] = calculate_kl_divergence(
+
+            reference_values,
+
+            current_values
+        )
+
+
+    drift_results.append(
+        row
+    )
+
+
+drift_df = pd.DataFrame(
+    drift_results
+)
+
+
+# ================================================================
+# 13. AGGREGATE DRIFT SCORES
+# ================================================================
+
+psi_columns = [
+
+    column
+
+    for column in drift_df.columns
+
+    if column.endswith(
+        "_psi"
+    )
+]
+
+
+kl_columns = [
+
+    column
+
+    for column in drift_df.columns
+
+    if column.endswith(
+        "_kl"
+    )
+]
+
+
+drift_df[
+    "mean_psi"
+] = (
+
+    drift_df[
+        psi_columns
+    ]
+
+    .mean(
+        axis=1
+    )
+)
+
+
+drift_df[
+    "max_psi"
+] = (
+
+    drift_df[
+        psi_columns
+    ]
+
+    .max(
+        axis=1
+    )
+)
+
+
+drift_df[
+    "mean_kl"
+] = (
+
+    drift_df[
+        kl_columns
+    ]
+
+    .mean(
+        axis=1
+    )
+)
+
+
+drift_df[
+    "max_kl"
+] = (
+
+    drift_df[
+        kl_columns
+    ]
+
+    .max(
+        axis=1
+    )
+)
+
+
+# ================================================================
+# 14. EVENT FREQUENCY MONITORING
+# ================================================================
+
+reference_monthly_counts = (
+
+    reference_data
+
+    .assign(
+
+        monitor_month=(
+
+            reference_data[
+                "date"
+            ]
+
+            .dt
+
+            .to_period("M")
+
+            .astype(str)
+        )
+    )
+
+    .groupby(
+        "monitor_month"
+    )
+
+    .size()
+)
+
+
+baseline_event_count = (
+
+    reference_monthly_counts
+
+    .mean()
+)
+
+
+drift_df[
+    "event_frequency_ratio"
+] = (
+
+    drift_df[
+        "event_count"
+    ]
+
+    /
+
+    baseline_event_count
+)
+
+
+# ================================================================
+# 15. DRIFT THRESHOLDS
+# ================================================================
+
+PSI_NORMAL = 0.10
+
+PSI_WARNING = 0.25
+
+KL_WARNING = 0.50
+
+FREQUENCY_HIGH = 1.50
+
+FREQUENCY_LOW = 0.50
+
+
+# ================================================================
+# 16. HEALTH ENGINE
+# ================================================================
+
+def determine_status(row):
+
+
+    major_drift = (
+
+        row[
+            "max_psi"
+        ]
+
+        >=
+
+        PSI_WARNING
+
+        or
+
+        row[
+            "max_kl"
+        ]
+
+        >=
+
+        KL_WARNING
+    )
+
+
+    frequency_problem = (
+
+        row[
+            "event_frequency_ratio"
+        ]
+
+        >
+
+        FREQUENCY_HIGH
+
+        or
+
+        row[
+            "event_frequency_ratio"
+        ]
+
+        <
+
+        FREQUENCY_LOW
+    )
+
+
+    minor_drift = (
+
+        row[
+            "max_psi"
+        ]
+
+        >=
+
+        PSI_NORMAL
+    )
+
+
+    if major_drift:
+
+        return "RETRAIN"
+
+
+    elif frequency_problem:
+
+        return "WARNING"
+
+
+    elif minor_drift:
+
+        return "WARNING"
+
+
+    else:
+
+        return "HEALTHY"
+
+
+drift_df[
+    "status"
+] = (
+
+    drift_df
+
+    .apply(
+        determine_status,
+        axis=1
+    )
+)
+
+
+drift_df[
+    "retrain_required"
+] = (
+
+    drift_df[
+        "status"
+    ]
+
+    ==
+
+    "RETRAIN"
+)
+
+
+# ================================================================
+# 17. FEATURE DRIFT REPORT
+# ================================================================
+
+feature_report = []
+
+
+for feature in MONITORED_FEATURES:
+
+
+    feature_report.append({
+
+        "Feature": feature,
+
+        "Mean PSI": (
+
+            drift_df[
+                f"{feature}_psi"
+            ]
+
+            .mean()
+        ),
+
+        "Max PSI": (
+
+            drift_df[
+                f"{feature}_psi"
+            ]
+
+            .max()
+        ),
+
+        "Mean KL": (
+
+            drift_df[
+                f"{feature}_kl"
+            ]
+
+            .mean()
+        ),
+
+        "Max KL": (
+
+            drift_df[
+                f"{feature}_kl"
+            ]
+
+            .max()
+        )
+    })
+
+
+feature_report = pd.DataFrame(
+    feature_report
+)
+
+
+feature_report = (
+
+    feature_report
+
+    .sort_values(
+
+        "Max PSI",
+
+        ascending=False
+    )
+)
+
+
+# ================================================================
+# 18. CREATE WEEKLY EVENT STATISTICS
+# ================================================================
+
+weekly_statistics = (
+
+    df
+
+    .set_index(
+        "date"
+    )
+
+    .resample("W")
+
+    .agg(
+
+        event_count=(
+            "type",
+            "count"
+        ),
+
+        transferred_count=(
+            "transferred",
+            "sum"
+        )
+    )
+
+    .reset_index()
+)
+
+
+weekly_statistics[
+    "transfer_rate"
+] = np.where(
+
+    weekly_statistics[
+        "event_count"
+    ]
+
+    >
+
+    0,
+
+    weekly_statistics[
+        "transferred_count"
+    ]
+
+    /
+
+    weekly_statistics[
+        "event_count"
+    ],
+
+    0
+)
+
+
+# ================================================================
+# 19. SAVE MONITORING RESULTS
+# ================================================================
+
+drift_df.to_csv(
+
+    "/content/holiday_drift_monitoring.csv",
+
+    index=False
+)
+
+
+feature_report.to_csv(
+
+    "/content/holiday_feature_drift_report.csv",
+
+    index=False
+)
+
+
+weekly_statistics.to_csv(
+
+    "/content/holiday_weekly_statistics.csv",
+
+    index=False
+)
+
+
+# ================================================================
+# 20. LATEST STATUS
+# ================================================================
+
+latest = drift_df.iloc[-1]
+
+
+print()
+print("=" * 75)
+print("LATEST PRODUCTION HEALTH")
+print("=" * 75)
+
+print()
+
+print(
+    "Monitoring Month:",
+    latest["month"]
+)
+
+print(
+    "Event Count:",
+    int(
+        latest["event_count"]
+    )
+)
+
+print(
+    "Transfer Rate:",
+    f"{latest['transfer_rate']:.2%}"
+)
+
+print(
+    "Maximum PSI:",
+    f"{latest['max_psi']:.4f}"
+)
+
+print(
+    "Maximum KL:",
+    f"{latest['max_kl']:.4f}"
+)
+
+print(
+    "Event Frequency:",
+    f"{latest['event_frequency_ratio']:.2f}x"
+)
+
+print(
+    "STATUS:",
+    latest["status"]
+)
+
+print(
+    "RETRAIN REQUIRED:",
+    "YES"
+    if latest["retrain_required"]
+    else
+    "NO"
+)
+
+
+# ================================================================
+# 21. DISPLAY FEATURE REPORT
+# ================================================================
+
+print()
+print("=" * 75)
+print("FEATURE DRIFT REPORT")
+print("=" * 75)
+
+display(
+    feature_report
+)
+
+
+# ================================================================
+# 22. DISPLAY MONITORING LOG
+# ================================================================
+
+print()
+print("=" * 75)
+print("PRODUCTION MONITORING LOG")
+print("=" * 75)
+
+display(
+
+    drift_df[
+        [
+            "month",
+
+            "event_count",
+
+            "transfer_rate",
+
+            "mean_psi",
+
+            "max_psi",
+
+            "mean_kl",
+
+            "max_kl",
+
+            "event_frequency_ratio",
+
+            "status",
+
+            "retrain_required"
+        ]
+    ]
+)
+
+
+# ================================================================
+# 23. DASHBOARD — KPI
+# ================================================================
+
+fig_kpi = go.Figure()
+
+
+fig_kpi.add_trace(
+
+    go.Indicator(
+
+        mode="number",
+
+        value=float(
+            latest[
+                "max_psi"
+            ]
+        ),
+
+        title={
+            "text": "Maximum PSI"
+        },
+
+        domain={
+            "x": [
+                0,
+                0.25
+            ],
+
+            "y": [
+                0,
+                1
+            ]
+        }
+    )
+)
+
+
+fig_kpi.add_trace(
+
+    go.Indicator(
+
+        mode="number",
+
+        value=float(
+            latest[
+                "max_kl"
+            ]
+        ),
+
+        title={
+            "text": "Maximum KL"
+        },
+
+        domain={
+            "x": [
+                0.25,
+                0.50
+            ],
+
+            "y": [
+                0,
+                1
+            ]
+        }
+    )
+)
+
+
+fig_kpi.add_trace(
+
+    go.Indicator(
+
+        mode="number",
+
+        value=float(
+            latest[
+                "event_count"
+            ]
+        ),
+
+        title={
+            "text": "Events"
+        },
+
+        domain={
+            "x": [
+                0.50,
+                0.75
+            ],
+
+            "y": [
+                0,
+                1
+            ]
+        }
+    )
+)
+
+
+fig_kpi.add_trace(
+
+    go.Indicator(
+
+        mode="number",
+
+        value=float(
+            latest[
+                "transfer_rate"
+            ]
+            * 100
+        ),
+
+        title={
+            "text": "Transfer Rate %"
+        },
+
+        domain={
+            "x": [
+                0.75,
+                1
+            ],
+
+            "y": [
+                0,
+                1
+            ]
+        }
+    )
+)
+
+
+fig_kpi.update_layout(
+
+    title=(
+        "🚦 Production Monitoring Health"
+    ),
+
+    height=300
+)
+
+
+fig_kpi.show()
+
+
+# ================================================================
+# 24. PSI DASHBOARD
+# ================================================================
+
+fig_psi = go.Figure()
+
+
+fig_psi.add_trace(
+
+    go.Scatter(
+
+        x=drift_df[
+            "month"
+        ],
+
+        y=drift_df[
+            "max_psi"
+        ],
+
+        mode="lines+markers",
+
+        name="Maximum PSI"
+    )
+)
+
+
+fig_psi.add_hline(
+
+    y=0.10,
+
+    line_dash="dash",
+
+    annotation_text=(
+        "Warning threshold"
+    )
+)
+
+
+fig_psi.add_hline(
+
+    y=0.25,
+
+    line_dash="dash",
+
+    annotation_text=(
+        "Retrain threshold"
+    )
+)
+
+
+fig_psi.update_layout(
+
+    title=(
+        "📈 Data Drift — "
+        "Population Stability Index"
+    ),
+
+    xaxis_title=(
+        "Production Month"
+    ),
+
+    yaxis_title=(
+        "Maximum PSI"
+    ),
+
+    template="plotly_white",
+
+    height=500
+)
+
+
+fig_psi.show()
+
+
+# ================================================================
+# 25. KL DASHBOARD
+# ================================================================
+
+fig_kl = go.Figure()
+
+
+fig_kl.add_trace(
+
+    go.Scatter(
+
+        x=drift_df[
+            "month"
+        ],
+
+        y=drift_df[
+            "max_kl"
+        ],
+
+        mode="lines+markers",
+
+        name="Maximum KL Divergence"
+    )
+)
+
+
+fig_kl.add_hline(
+
+    y=0.50,
+
+    line_dash="dash",
+
+    annotation_text=(
+        "Retrain threshold"
+    )
+)
+
+
+fig_kl.update_layout(
+
+    title=(
+        "📊 Data Drift — "
+        "KL Divergence"
+    ),
+
+    xaxis_title=(
+        "Production Month"
+    ),
+
+    yaxis_title=(
+        "Maximum KL Divergence"
+    ),
+
+    template="plotly_white",
+
+    height=500
+)
+
+
+fig_kl.show()
+
+
+# ================================================================
+# 26. EVENT FREQUENCY DASHBOARD
+# ================================================================
+
+fig_frequency = go.Figure()
+
+
+fig_frequency.add_trace(
+
+    go.Bar(
+
+        x=drift_df[
+            "month"
+        ],
+
+        y=drift_df[
+            "event_count"
+        ],
+
+        name="Event Count"
+    )
+)
+
+
+fig_frequency.update_layout(
+
+    title=(
+        "📅 Event Volume Over Time"
+    ),
+
+    xaxis_title=(
+        "Production Month"
+    ),
+
+    yaxis_title=(
+        "Number of Events"
+    ),
+
+    template="plotly_white",
+
+    height=500
+)
+
+
+fig_frequency.show()
+
+
+# ================================================================
+# 27. TRANSFER RATE DASHBOARD
+# ================================================================
+
+fig_transfer = go.Figure()
+
+
+fig_transfer.add_trace(
+
+    go.Scatter(
+
+        x=drift_df[
+            "month"
+        ],
+
+        y=(
+            drift_df[
+                "transfer_rate"
+            ]
+            * 100
+        ),
+
+        mode="lines+markers",
+
+        name="Transfer Rate"
+    )
+)
+
+
+fig_transfer.update_layout(
+
+    title=(
+        "🔄 Holiday Transfer Rate"
+    ),
+
+    xaxis_title=(
+        "Production Month"
+    ),
+
+    yaxis_title=(
+        "Transfer Rate (%)"
+    ),
+
+    template="plotly_white",
+
+    height=500
+)
+
+
+fig_transfer.show()
+
+
+# ================================================================
+# 28. FEATURE DRIFT DASHBOARD
+# ================================================================
+
+fig_feature = go.Figure()
+
+
+fig_feature.add_trace(
+
+    go.Bar(
+
+        x=feature_report[
+            "Feature"
+        ],
+
+        y=feature_report[
+            "Max PSI"
+        ],
+
+        name="Maximum PSI"
+    )
+)
+
+
+fig_feature.add_hline(
+
+    y=0.10,
+
+    line_dash="dash",
+
+    annotation_text="Warning"
+)
+
+
+fig_feature.add_hline(
+
+    y=0.25,
+
+    line_dash="dash",
+
+    annotation_text="Retrain"
+)
+
+
+fig_feature.update_layout(
+
+    title=(
+        "🔎 Feature-Level Drift"
+    ),
+
+    xaxis_title=(
+        "Feature"
+    ),
+
+    yaxis_title=(
+        "Maximum PSI"
+    ),
+
+    template="plotly_white",
+
+    height=550
+)
+
+
+fig_feature.show()
+
+
+# ================================================================
+# 29. CREATE HTML DASHBOARD
+# ================================================================
+
+print()
+print("=" * 75)
+print("CREATING HTML DASHBOARD")
+print("=" * 75)
+
+
+html_dashboard = f"""
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<title>
+Holiday Event Data Drift Monitoring
+</title>
+
+<style>
+
+body {{
+
+    font-family:
+        Arial,
+        sans-serif;
+
+    background:
+        #f5f7fa;
+
+    margin:
+        0;
+
+    padding:
+        30px;
+}}
+
+.container {{
+
+    max-width:
+        1400px;
+
+    margin:
+        auto;
+}}
+
+.header {{
+
+    background:
+        white;
+
+    padding:
+        25px;
+
+    border-radius:
+        15px;
+
+    margin-bottom:
+        20px;
+}}
+
+.cards {{
+
+    display:
+        grid;
+
+    grid-template-columns:
+        repeat(4, 1fr);
+
+    gap:
+        15px;
+
+    margin-bottom:
+        20px;
+}}
+
+.card {{
+
+    background:
+        white;
+
+    padding:
+        20px;
+
+    border-radius:
+        15px;
+
+    box-shadow:
+        0 2px 10px
+        rgba(0,0,0,0.08);
+}}
+
+.value {{
+
+    font-size:
+        30px;
+
+    font-weight:
+        bold;
+}}
+
+.status {{
+
+    font-size:
+        20px;
+
+    font-weight:
+        bold;
+}}
+
+table {{
+
+    width:
+        100%;
+
+    border-collapse:
+        collapse;
+
+    background:
+        white;
+}}
+
+th, td {{
+
+    padding:
+        10px;
+
+    border-bottom:
+        1px solid #ddd;
+
+    text-align:
+        left;
+}}
+
+</style>
+
+</head>
+
+
+<body>
+
+<div class="container">
+
+<div class="header">
+
+<h1>
+🚦 Production Data Drift Monitoring
+</h1>
+
+<p>
+Holiday Events Dataset
+</p>
+
+<p>
+Reference → Production → PSI → KL Divergence → Retraining Decision
+</p>
+
+</div>
+
+
+<div class="cards">
+
+<div class="card">
+
+<div>
+Maximum PSI
+</div>
+
+<div class="value">
+
+{latest["max_psi"]:.3f}
+
+</div>
+
+</div>
+
+
+<div class="card">
+
+<div>
+Maximum KL
+</div>
+
+<div class="value">
+
+{latest["max_kl"]:.3f}
+
+</div>
+
+</div>
+
+
+<div class="card">
+
+<div>
+Event Count
+</div>
+
+<div class="value">
+
+{int(latest["event_count"])}
+
+</div>
+
+</div>
+
+
+<div class="card">
+
+<div>
+Model Status
+</div>
+
+<div class="status">
+
+{latest["status"]}
+
+</div>
+
+</div>
+
+</div>
+
+
+<div class="header">
+
+<h2>
+Latest Monitoring Decision
+</h2>
+
+<p>
+
+Retraining Required:
+
+<b>
+
+{"YES" if latest["retrain_required"] else "NO"}
+
+</b>
+
+</p>
+
+<p>
+
+Transfer Rate:
+
+<b>
+
+{latest["transfer_rate"]:.2%}
+
+</b>
+
+</p>
+
+</div>
+
+
+<div class="header">
+
+<h2>
+Monitoring Rules
+</h2>
+
+<table>
+
+<tr>
+
+<th>
+Metric
+</th>
+
+<th>
+Healthy
+</th>
+
+<th>
+Warning
+</th>
+
+<th>
+Retrain
+</th>
+
+</tr>
+
+
+<tr>
+
+<td>
+PSI
+</td>
+
+<td>
+&lt; 0.10
+</td>
+
+<td>
+0.10 - 0.25
+</td>
+
+<td>
+≥ 0.25
+</td>
+
+</tr>
+
+
+<tr>
+
+<td>
+KL Divergence
+</td>
+
+<td>
+&lt; 0.50
+</td>
+
+<td>
+-
+</td>
+
+<td>
+≥ 0.50
+</td>
+
+</tr>
+
+</table>
+
+</div>
+
+
+</div>
+
+</body>
+
+</html>
+"""
+
+
+with open(
+
+    "/content/holiday_drift_dashboard.html",
+
+    "w"
+
+) as file:
+
+    file.write(
+        html_dashboard
+    )
+
+
+# ================================================================
+# 30. FINAL PROJECT SUMMARY
+# ================================================================
+
+print()
+print()
+print("=" * 75)
+print("🎯 PROJECT COMPLETED")
+print("=" * 75)
+
+print()
+
+print(
+    "Dataset:"
+)
+
+print(
+    "/content/holidays_events.csv"
+)
+
+print()
+
+print(
+    "Reference period:"
+)
+
+print(
+    reference_data[
+        "date"
+    ].min(),
+
+    "→",
+
+    reference_data[
+        "date"
+    ].max()
+)
+
+print()
+
+print(
+    "Production simulation:"
+)
+
+print(
+    production_data[
+        "date"
+    ].min(),
+
+    "→",
+
+    production_data[
+        "date"
+    ].max()
+)
+
+print()
+
+print(
+    "Latest PSI:",
+    f"{latest['max_psi']:.4f}"
+)
+
+print(
+    "Latest KL:",
+    f"{latest['max_kl']:.4f}"
+)
+
+print(
+    "Latest Status:",
+    latest["status"]
+)
+
+print(
+    "Retraining Required:",
+    "YES"
+    if latest["retrain_required"]
+    else
+    "NO"
+)
+
+print()
+
+print("=" * 75)
+print("GENERATED FILES")
+print("=" * 75)
+
+print(
+    "/content/holiday_drift_monitoring.csv"
+)
+
+print(
+    "/content/holiday_feature_drift_report.csv"
+)
+
+print(
+    "/content/holiday_weekly_statistics.csv"
+)
+
+print(
+    "/content/holiday_drift_dashboard.html"
+)
+
+print()
+
+print("=" * 75)
+print("MLOPS PIPELINE")
+print("=" * 75)
+
+print(
+    """
+holidays_events.csv
+        ↓
+Data Cleaning
+        ↓
+Time-Based Split
+        ↓
+Reference Distribution
+        ↓
+Production Simulation
+        ↓
+Monthly Monitoring
+        ↓
+┌──────────────────────┐
+│ PSI                  │
+│ KL Divergence        │
+│ Event Frequency      │
+│ Transfer Rate        │
+└──────────┬───────────┘
+           ↓
+     Health Engine
+           ↓
+ ┌─────────┼──────────┐
+ ↓         ↓          ↓
+HEALTHY  WARNING   RETRAIN
+"""
+)
+
+print()
+print("=" * 75)
+print("✅ DONE")
+print("=" * 75)
